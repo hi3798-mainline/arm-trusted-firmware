@@ -1,0 +1,102 @@
+HiSilicon Hi3798MV300
+====================
+
+This experimental BL31-only port supports the X96Q board with four Cortex-A53
+cores and 1 GiB of DDR. It targets the vendor BootROM/AUX boot path. AUX
+initializes DDR; an external AArch32 wrapper loads BL31 and BL33 and enters
+AArch64 EL3. Neither the wrapper nor the vendor firmware is part of TF-A.
+
+Boot contract
+-------------
+
+Build with an AArch64 toolchain::
+
+    make PLAT=hi3798mv300 CROSS_COMPILE=aarch64-linux-gnu- DEBUG=1 bl31
+
+The output is ``build/hi3798mv300/debug/bl31.bin``. Load it at ``0x3fe00000``
+and preload BL33 at ``0x02000000``. Only CPU0 may enter the cold-boot path;
+CPUs 1-3 must remain in reset. The inherited system counter runs at 24 MHz.
+The console is PL011 at ``0xf8b00000``, using a 75 MHz input and 115200 baud.
+BL33 is entered at Non-secure EL2 without boot arguments.
+
+BL33 and the OS must reserve the entire ``[0x3fe00000, 0x40000000)`` interval.
+Use a ``no-map`` reserved-memory node in the OS device tree. This prevents
+allocation over BL31; it does not configure hardware memory isolation.
+
+PSCI operations
+---------------
+
+* ``CPU_ON`` starts CPUs 1-3 from reset. The common PSCI implementation owns
+  per-CPU state; a platform lock serializes changes to shared CRG registers.
+  The reset vector remains at the aligned TF-A warm-entry shim.
+* ``CPU_SUSPEND`` accepts CPU-level standby with original-format
+  ``power_state = 0``. It preserves CPU/GIC context and temporarily routes
+  IRQ/FIQ to EL3 around WFI, restoring SCR_EL3 before returning. The OS
+  handles the pending interrupt. No power/reset registers are changed.
+* ``SYSTEM_RESET`` uses SYS_CTRL. BootROM restarts; subsequent boot-medium
+  selection belongs to the hardware boot path.
+
+The port uses the generic standby-only PSCI callback contract:
+``cpu_standby`` and ``validate_power_state`` are present, while
+``pwr_domain_suspend`` and ``pwr_domain_suspend_finish`` are absent.
+All nonzero suspend states are rejected. ``CPU_OFF``, powerdown suspend,
+``SYSTEM_SUSPEND`` and ``SYSTEM_OFF`` are unsupported. This is a limited
+PSCI implementation, not a claim of full conformance.
+
+For Linux cpuidle, reference a CPU idle-state node with
+``arm,psci-suspend-param = <0>`` from each CPU. The local timer keeps running;
+do not specify ``local-timer-stop``. Idle latency, minimum useful residency
+and energy savings still require measurement.
+
+GIC ownership and security limitations
+-------------------------------------
+
+On the tested vendor-AUX boot path, actual Non-secure execution sees the
+Secure GIC register view. The cause remains unresolved. This port assigns
+all implemented interrupts to Group0 and enables only Group0, with FIQEn
+and AckCtl cleared. The OS uses ordinary IRQ acknowledgment and completion.
+SPI groups are initialized once; banked SGI/PPI groups are initialized on
+each starting CPU. Linux uses its unmodified GICv2 driver.
+
+All interrupts belong to the OS. BL31 owns no interrupts and uses no Secure
+timer. This policy provides no Secure/Non-secure interrupt isolation and
+cannot support a Secure payload or Secure interrupt service. The platform
+does not configure TZPC or a DRAM firewall. Its Secure translation-table
+attributes alone do not establish a hardware security boundary.
+
+The build requires ``SPD=none`` and rejects BL32/preloaded BL32, ``SPM_MM``,
+``SPMC_AT_EL3``, ``SDEI_SUPPORT``, ``EL3_EXCEPTION_HANDLING``, ``ENABLE_RME``
+and ``PSCI_OS_INIT_MODE``. Other boot paths and KVM guests are unvalidated.
+
+Register provenance and remaining questions
+------------------------------------------
+
+The MV300/MV300H datasheet revision 00B02 documents PERI_CRG18 frequency
+selection and SYS_CTRL reset. The HiSTBLinuxV100R005C00SPC050 SDK selects
+``hi3798mv2x`` for its MV300 fastboot configuration; that code supplies the
+POR/core reset fields, AARCH_MODE and RVBAR sequence. The related MV200
+TF-A port corroborates CPU_ON but does not establish MV300 compatibility
+for other security or power operations.
+
+Minimum reset settling times and minimum RVBAR alignment remain unresolved;
+the port retains the tested 2 KiB alignment. The broad peripheral mapping
+and the complete hardware protection model need further review. Group0
+ownership is specific to this boot path and needs maintainer review before
+this port can be treated as an upstream-ready platform.
+
+Validation
+----------
+
+Reported X96Q debug-build tests cover four-core Linux boot, UART/timer
+interrupts, four pinned 16 MiB copy/SHA256 workers with 32 rounds each,
+standby on all cores with zero rejected entries, and SYSTEM_RESET from
+U-Boot and Linux. Contract tests cover 28 feature, affinity, entry-point
+and suspend-encoding cases. The callback-free standby variant also passed
+the reported contract, standby and stress checks.
+
+One same-target and one different-target CPU_ON race were recorded with
+uncached Non-secure test payloads. The different-target test had overlapping
+caller-side SMC windows; it does not prove internal lock contention or all
+possible interleavings. Release builds have been compiled but not tested
+on hardware. Power-off, deep suspend and interrupt security isolation
+remain outside the validated lifecycle.

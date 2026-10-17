@@ -14,6 +14,7 @@ Platform Ports
    meson-gxbb
    meson-gxl
    meson-g12a
+   hi3798mv300
    hikey
    hikey960
    intel-agilex
