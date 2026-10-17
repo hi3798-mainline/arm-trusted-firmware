@@ -144,6 +144,12 @@ int psci_cpu_suspend(unsigned int power_state,
 		return PSCI_E_SUCCESS;
 	}
 
+	/* A standby-only platform cannot service the generic suspend path. */
+	if ((psci_plat_pm_ops->pwr_domain_suspend == NULL) ||
+	    (psci_plat_pm_ops->pwr_domain_suspend_finish == NULL)) {
+		return PSCI_E_INVALID_PARAMS;
+	}
+
 	/*
 	 * If a power down state has been requested, we need to verify entry
 	 * point and program entry information.

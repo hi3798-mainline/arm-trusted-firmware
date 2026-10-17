@@ -3054,6 +3054,15 @@ handler should put the CPU into a low power retention state (usually by
 issuing a wfi instruction) and ensure that it can be woken up from that
 state by a normal interrupt. The generic code expects the handler to succeed.
 
+A platform that supports only CPU-level standby can provide this handler and
+``validate_power_state()`` without ``pwr_domain_suspend()`` or
+``pwr_domain_suspend_finish()``. This is sufficient to advertise
+``CPU_SUSPEND``. The validator must reject unsupported power states. Requests
+outside the CPU standby fast path require both power-domain suspend handlers;
+otherwise the generic code returns ``PSCI_E_INVALID_PARAMS``. Standby-only
+support does not by itself advertise ``SYSTEM_SUSPEND`` or
+``PSCI_SET_SUSPEND_MODE``.
+
 plat_psci_ops.pwr_domain_on()
 .............................
 
